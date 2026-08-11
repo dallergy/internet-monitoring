@@ -1,68 +1,100 @@
+# Internet Monitoring Stack
 
-NOTE: For some reason this repository stays super popular even though I stopped using and maintaing it (missed notifications) - thus I'm going to mark this as archived to not unnecessarily mislead. If you made a fork that is better and more maintained please let me know and I'll link to it in the project description/issues.
+A Docker Compose stack for monitoring your home network with [Prometheus](https://prometheus.io/), [Grafana](https://grafana.com/), the [Blackbox Exporter](https://github.com/prometheus/blackbox_exporter), and a [Speedtest exporter](https://github.com/kutovoys/speedtest-exporter).
 
-# A Docker Stack which Monitors your home network
-Here's a quick start to stand-up a Docker [Prometheus](http://prometheus.io/) stack containing Prometheus, Grafana with  [blackbox-exporter](https://github.com/prometheus/blackbox_exporter) and [speedtest-exporter](https://github.com/stefanwalther/speedtest-exporter) to collect and graph home network connections and speed.
+The stack probes HTTP endpoints (router, DNS, websites), records download/upload speed over time, and ships a pre-provisioned Grafana dashboard.
 
-## Pre-requisites
-Before we get started installing the Prometheus stack. Ensure you install the latest version of docker and [docker-compose](https://docs.docker.com/compose/install/) on your Docker host machine. This has been tested with Docker for Mac and Synology and it works.
+## Prerequisites
 
-# Quick Start
+- Docker Engine 24+ with the [Compose plugin](https://docs.docker.com/compose/install/) (`docker compose`)
+- Outbound internet access (for Speedtest and external probes)
 
-If on Mac run this:
+## Quick start
 
-```
-git clone https://github.com/maxandersen/internet-monitoring && cd internet-monitoring/prometheus && docker-compose up && open http://localhost:3030/d/o9mIe_Aik/internet-connection
-```
-
-otherwise:
-
-```
-git clone https://github.com/maxandersen/internet-monitoring
-cd internet-monitoring/prometheus
-docker-compose up
+```bash
+git clone https://github.com/dallergy/internet-monitoring.git
+cd internet-monitoring
+cp .env.example .env   # optional: set Grafana password and speedtest interval
+docker compose up -d
 ```
 
-Goto [http://localhost:3030/d/o9mIe_Aik/internet-connection](http://localhost:3030/d/o9mIe_Aik/internet-connection) (change `localhost` to your docker host ip/name).
+Open Grafana at [http://localhost:3030/d/o9mIe_Aik/internet-connection](http://localhost:3030/d/o9mIe_Aik/internet-connection).
+
+Default credentials:
+
+- Username: `admin`
+- Password: `changeme` (or the value of `GRAFANA_ADMIN_PASSWORD` in `.env`)
 
 ## Configuration
-To change what hosts you ping you change the `targets` section in [/prometheus/pinghosts.yaml](./prometheus/pinghosts.yaml) file.
 
-For speedtest the only relevant configuration is how often you want the check to happen. It is at 5 minutes by default which might be too much if you have limit on downloads. This is changed by editing `scrape_interval` under `speedtest` in [/prometheus/prometheus.yml](./prometheus/prometheus.yml).
+### Monitored endpoints
 
+Edit [`prometheus/pinghosts.yaml`](./prometheus/pinghosts.yaml). Each target uses the format:
 
-Once configurations are done let's start it up. From the /prometheus project directory run the following command:
+```yaml
+- targets:
+    - url;humanname;routing;switch
+```
 
-    $ docker-compose up -d
+Example:
 
-That's it. docker-compose builds the entire Grafana and Prometheus stack automagically. 
+```yaml
+- targets:
+    - https://1.1.1.1;cloudflare-dns;external;internet
+    - http://192.168.1.1;router;local;lan
+```
 
-The Grafana Dashboard is now accessible via: `http://<Host IP Address>:3030` for example http://localhost:3030
+### Speedtest frequency
 
-username - admin
-password - wonka (Password is stored in the `config.monitoring` env file)
+Speedtests run inside the exporter on a schedule (not on every Prometheus scrape). Adjust the interval in `.env`:
 
-The DataSource and Dashboard for Grafana are automatically provisioned. 
+```bash
+SPEEDTEST_INTERVAL_MINUTES=15
+```
 
-If all works it should be available at http://localhost:3030/d/o9mIe_Aik/internet-connection - if no data shows up try change the timeduration to something smaller.
+Or set `UPDATE_INTERVAL` directly on the `speedtest` service in `docker-compose.yml`.
 
-<center><img src="images/dashboard.png" width="4600" heighth="500"></center>
+### Optional Sonos exporter
 
-## Interesting urls
+The original stack included a Sonos exporter that requires host networking for discovery:
 
-Note: replace `localhost` with your docker host ip/name if not running this locally.
+```bash
+docker compose --profile sonos up -d
+```
 
-http://localhost:9090/targets shows status of monitored targets as seen from prometheus - in this case which hosts being pinged and speedtest. note: speedtest will take a while before it shows as UP as it takes ~30s to respond.
+Edit the Sonos target in [`prometheus/prometheus.yml`](./prometheus/prometheus.yml) (`job_name: sonos`) to match your Sonos host IP.
 
-http://localhost:9090/graph?g0.expr=probe_http_status_code&g0.tab=1 shows prometheus value for `probe_http_status_code` for each host. You can edit/play with additional values. Useful to check everything is okey in prometheus (in case Grafana is not showing the data you expect).
+## Services and ports
 
-http://localhost:9115 blackbox exporter endpoint. Lets you see what have failed/succeded.
+| Service    | Port  | Description                          |
+|------------|-------|--------------------------------------|
+| Grafana    | 3030  | Dashboards and visualization         |
+| Prometheus | 9090  | Metrics database and query UI        |
+| Blackbox   | 9115  | HTTP/TCP/ICMP probe exporter         |
+| Speedtest  | 9696  | Speedtest.net metrics exporter       |
+| Node exp.  | 9100  | Host metrics (CPU, memory, disk)     |
+| Sonos      | 1915  | Optional (`--profile sonos`)         |
 
-http://localhost:9696/metrics speedtest exporter endpoint. Does take ~30 seconds to show its result as it runs an actual speedtest when requested.
+Useful URLs:
 
-## Thanks and a disclaimer
+- Prometheus targets: http://localhost:9090/targets
+- Blackbox exporter: http://localhost:9115
+- Speedtest metrics: http://localhost:9696/metrics (first result may take a minute)
 
-Thanks to @vegasbrianc work on making a [super easy docker](https://github.com/vegasbrianc/github-monitoring) stack for running prometheus and grafana.
+## What changed in this modernization
 
-I also want to disclaim that Prometheus aren't really (currently) intended for this kind of blackbox/external monitoring and this setup is not in anyway secured. Thus only use this for inspiration and do not blame me if someone hacks this and figure out what your real internet sped is :)
+- Pinned container images (Prometheus 2.55, Grafana 11.4, Blackbox 0.28)
+- Compose v2 format (no legacy `version` / `links`)
+- GitHub Actions CI instead of Travis CI
+- Maintained Speedtest exporter (`kutovoys/speedtest-exporter`)
+- Grafana 11 dashboard with native panels (stat, timeseries, status-history)
+- Environment-based Grafana password via `.env`
+- Generic example probe targets instead of personal hostnames
 
+## Security notice
+
+This stack is intended for home-lab use. It exposes admin UIs on local ports without TLS or hardening. Do not expose it to the public internet without additional security controls.
+
+## Credits
+
+Inspired by [vegasbrianc/github-monitoring](https://github.com/vegasbrianc/github-monitoring) and the original [maxandersen/internet-monitoring](https://github.com/maxandersen/internet-monitoring) project.

@@ -1,101 +1,124 @@
-version: "3.1"
+# Internet monitoring stack — Prometheus, Grafana, Blackbox, Speedtest, Node Exporter
+# Optional: Sonos exporter via profile `sonos` (see README)
+
+name: internet-monitoring
 
 volumes:
-    prometheus_data: {}
-    grafana_data: {}
+  prometheus_data:
+  grafana_data:
 
 networks:
-  front-tier:
-  back-tier:
+  monitoring:
 
 services:
   prometheus:
-    image: prom/prometheus:v2.0.0
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
     volumes:
-      - ./prometheus/:/etc/prometheus/
+      - ./prometheus:/etc/prometheus:ro
       - prometheus_data:/prometheus
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+      - --storage.tsdb.retention.time=30d
     ports:
-      - 9090:9090
-    links:
-      - ping:ping
-      - speedtest:speedtest
+      - "9090:9090"
+    depends_on:
+      ping:
+        condition: service_started
+      speedtest:
+        condition: service_started
+      nodeexp:
+        condition: service_started
     networks:
-      - back-tier
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   grafana:
-    image: grafana/grafana
+    image: grafana/grafana:11.4.0
+    restart: unless-stopped
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning/:/etc/grafana/provisioning/
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
     ports:
-      - 3030:3000
-    env_file:
-      - ./grafana/config.monitoring
+      - "3030:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-changeme}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s/"
     networks:
-      - back-tier
-      - front-tier
- 
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   ping:
-    tty: true
-    stdin_open: true
-    expose:
-      - 9115
-    ports:
-      - 9115:9115
-    image: prom/blackbox-exporter
+    image: prom/blackbox-exporter:v0.28.0
+    restart: unless-stopped
     volumes:
-      - ./blackbox/config:/config
+      - ./blackbox/config:/config:ro
     command:
-      - '--config.file=/config/blackbox.yml'
+      - --config.file=/config/blackbox.yml
+    ports:
+      - "9115:9115"
     networks:
-      - back-tier
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9115/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
   speedtest:
-    tty: true
-    stdin_open: true
-    expose:
-      - 9696
+    image: kutovoys/speedtest-exporter:v0.0.3
+    restart: unless-stopped
+    environment:
+      UPDATE_INTERVAL: ${SPEEDTEST_INTERVAL_MINUTES:-15}
+      METRICS_PORT: "9090"
     ports:
-      - 9696:9696
-    image: stefanwalther/speedtest-exporter
-    restart: always
+      - "9696:9090"
     networks:
-      - back-tier
-
-  sonos:
-    tty: true
-    stdin_open: true
-    expose: 
-      - 1915
-    ports:
-      - 1915:1915
-    image: maxandersen/sonos_exporter
-    command:
-      - '--address=0.0.0.0:1915'
-    network_mode: host
+      - monitoring
 
   nodeexp:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
     privileged: true
-    image: prom/node-exporter
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/rootfs:ro
-    ports:
-      - 9100:9100
-    restart: always
     command:
-      - '--path.procfs=/host/proc'
-      - '--path.sysfs=/host/sys'
-      - --collector.filesystem.ignored-mount-points
-      - "^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)"
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)
+    ports:
+      - "9100:9100"
     networks:
-      - back-tier
+      - monitoring
 
+  sonos:
+    image: maxandersen/sonos_exporter:latest
+    restart: unless-stopped
+    profiles:
+      - sonos
+    command:
+      - --address=0.0.0.0:1915
+    ports:
+      - "1915:1915"
+    # Sonos discovery requires host networking on most home networks.
+    network_mode: host
