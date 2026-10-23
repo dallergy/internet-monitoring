@@ -64,6 +64,8 @@ docker compose --profile sonos up -d
 
 Edit the Sonos target in [`prometheus/prometheus.yml`](./prometheus/prometheus.yml) (`job_name: sonos`) to match your Sonos host IP.
 
+The optional image is pinned to the March 2021 `maxandersen/sonos_exporter` digest. That image is unmaintained (Debian 10) and still has known OS vulnerabilities. There is no newer tag. Leave the profile off unless you accept that, or replace the exporter yourself.
+
 ## Services and ports
 
 | Service    | Port  | Description                          |
@@ -83,13 +85,15 @@ Useful URLs:
 
 ## What changed in this modernization
 
-- Pinned container images (Prometheus 2.55, Grafana 11.4, Blackbox 0.28)
+- Pinned container images (Prometheus 3.15, Grafana 12.4, Blackbox 0.29, Node Exporter 1.12)
 - Compose v2 format (no legacy `version` / `links`)
 - GitHub Actions CI instead of Travis CI
 - Maintained Speedtest exporter (`kutovoys/speedtest-exporter`)
 - Grafana 11 dashboard with native panels (stat, timeseries, status-history)
 - Environment-based Grafana password via `.env`
 - Generic example probe targets instead of personal hostnames
+
+Prometheus 3 reads a TSDB written by 2.55. After upgrading, do not roll the Prometheus image back below 2.55 or the existing volume will be unreadable.
 
 ## Security notice
 
